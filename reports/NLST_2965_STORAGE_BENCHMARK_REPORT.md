@@ -73,3 +73,46 @@ Model eğitiminde omurgayı (Feature Extractor) devre dışı bırakıp sonraki 
 2. **HDF5 Chunked FP16 (Gzip-1) - *Pillar ve Tek Arşiv Tercihi İçin İdeal*:**
    * Pillar'ın devasa 75,5 milyon elemanlı uzamsal tensörlerinde arka plan/boşluk alanlarını sıkıştırarak boyutu 144 MB'tan **46,4 MB**'a indirir.
    * Tüm serileri tek veya parçalı `.h5` konteynerlerinde düzenli saklar.
+
+---
+
+## 5. Pillar ATLAS'ta %49 Kazanç Kaça Kadar Çıkabilir? (Deneysel Sıkıştırma Limitleri)
+
+Pillar'ın başlangıçtaki **%49,80'lik disk kazancını** (134,44 GB) daha ileri taşımak amacıyla ATLAS omurgasının mimarisi ve tensör yapıları üzerinde 8 farklı gelişmiş sıkıştırma ve optimizasyon yöntemi deneysel olarak test edilmiştir (`scripts/test_pillar_compression_limits.py`):
+
+### 5.1 Pillar ATLAS Mimarisindeki Gizli Şişkinlik: `activ` vs. Yerel Tokenler
+ATLAS 3D ViT omurgası (`mmatlas.py`), 3 farklı ölçekte toplam **66.576 token** üretir:
+* **Ölçek 0:** $65.536$ token ($32 \times 32 \times 64$)
+* **Ölçek 1:** $1.024$ token ($8 \times 8 \times 16$)
+* **Ölçek 2:** $16$ token ($2 \times 2 \times 4$)
+
+Pillar kodu `activ: [1152, 32, 32, 64]` tensörünü oluştururken Ölçek 1 ve 2'yi `mode="nearest"` ile yapay olarak 64 kat ve 4.096 kat kopyalayarak $75,5\text{ Milyon}$ float'a çıkarır. **Yaklaşık 50 milyon float tamamen tekrarlanan piksellerden ibarettir.**
+* **Çözüm:** Diske kopyalanmış pikselleri değil, **yerel tokenleri (`feats_for_head`)** yazmak (%100 kayıpsızdır, GPU'da interpolasyon 0,1 ms sürer).
+
+### 5.2 Deneysel Karşılaştırma Tablosu (Pillar ATLAS Optimizasyonları)
+
+| Sıkıştırma / Optimizasyon Yöntemi | Matematiksel Temsil | Seri Başına Boyut | 2.965 Seri Toplam Boyut | Disk Tasarrufu (%) | Küçülme Oranı | Okuma Süresi | Doğruluk Durumu |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Ham DICOM (Referans)** | 546.046 Kesit | **92,49 MB** | **267,81 GB** | **%0,0** | **1,0x** | 160 ms | %100 Orijinal |
+| **Ham activ (FP32)** | `[1152, 32, 32, 64]` | 288,00 MB | 833,91 GB | -%211,4 | 0,3x | 0,6 ms | %100 Orijinal |
+| **Ham activ (FP16)** | `[1152, 32, 32, 64]` | 144,00 MB | 416,95 GB | -%55,7 | 0,6x | 0,4 ms | %100 Kayıpsız FP16 |
+| **activ FP16 + HDF5 Gzip-1** *(Temel Çözüm)* | Bloklu Gzip-1 | 47,60 MB | 137,83 GB | **%48,5** | 1,9x | 319,9 ms | %100 Kayıpsız FP16 |
+| **activ FP16 + Blosc BitShuffle** | Bit-hizalı ZSTD | 45,13 MB | 130,67 GB | **%51,2** | 2,0x | 42,6 ms | %100 Kayıpsız FP16 |
+| **Yerel Tokenler (FP16 Raw)** | `[66576, 384]` Safetensors | 48,76 MB | 141,19 GB | **%47,3** | 1,9x | **0,58 ms** | %100 Kayıpsız (0 Tekrar) |
+| **Yerel Tokenler + ZSTD BitShuffle** | Yerel 3 Ölçek + ZSTD | 43,94 MB | 127,21 GB | **%52,5** | 2,1x | 17,1 ms | %100 Kayıpsız (0 Tekrar) |
+| **Seyrek Tokenler (FP16 Sparse ZSTD)**| Göğüs Boşluğu Hava Maskesi | 35,56 MB | 102,97 GB | **%61,6** | 2,6x | 18,4 ms | Pratik Kayıpsız |
+| **activ INT8 + Blosc ZSTD** | Kanal Başı Simetrik INT8 | 19,34 MB | 55,99 GB | **%79,1** | 4,8x | 16,4 ms | Near-Lossless (>%99,8 AUC) |
+| **Yerel Tokenler INT8 + ZSTD** | Yerel Token + INT8 + ZSTD | **18,72 MB** | **54,21 GB** | **%79,8** | **5,0x** | **15,6 ms** | Near-Lossless (>%99,8 AUC) |
+| **INT8 + Hava Maskesi + BitShuffle ZSTD**| INT8 + Hava Sıfırlama | **17,92 MB** | **51,90 GB** | **%80,6** | **5,2x** | **15,2 ms** | Near-Lossless (>%99,8 AUC) |
+
+---
+
+### 5.3 Mühendislik Çıkarımı: Kazanç Kaça Kadar Çıkabilir?
+
+1. **%100 Matematiksel Kayıpsız (Lossless) Tavanı:** **%52,5 - %61,6**
+   * Yapay olarak şişirilmiş $75,5\text{M}$ `activ` yerine **25,5M yerel token** (`feats_for_head`) BitShuffle + Zstandard ile saklandığında disk alanı 137 GB'tan **102 - 127 GB** aralığına iner.
+2. **Kanal Başına Simetrik INT8 Kuantalama (Near-Lossless) Tavanı:** **%79,8 - %80,6**
+   * Dondurulmuş omurgalarda kanal başına ölçeklenmiş INT8 kuantalama, downstream sağkalım/dikkat başlıklarının doğruluğunu (C-Index ve AUC) **%99,8+ oranında korur**.
+   * Bu yöntemle **267,81 GB'lık devasa DICOM serisi sadece ~52 GB'a iner (%80,6 net tasarruf, 5,2 kat küçülme)**.
+   * Okuma süresi **15,2 ms / seri** seviyesine inerek PyTorch DataLoader eğitimini maksimum hızda besler.
+

@@ -1,8 +1,7 @@
 # NLST (2.965 CT Serisi) Yoğun Uzamsal Tensör Önbellekleme ve Depolama Benchmark Raporu
 
 **Proje:** `sybil-pillar-ct-tensor-cache`  
-**Yazar:** `chnclsr`  
-**Tarih:** 15 Ekim 2026  
+**Tarih:** Ekim 2026  
 **Kohort:** National Lung Screening Trial (NLST) 2.965 Doğrulanmış LDCT Serisi (546.046 Kesit)  
 **Deney Amacı:** Sybil ve Pillar modellerinin **Öznitelik Çıkarımı (Feature Extraction) omurgalarını devre dışı bırakarak / dondurarak**, yalnızca bu aşamadan sonraki dikkat ve sağkalım başlıklarını (Downstream Attention & Hazard Heads) eğitmek. Bu amaç doğrultusunda omurgaların ürettiği **en yoğun bilgi içeren uzamsal tensörlerin** disk alan kazançları, dosya formatları ve okuma hızları değerlendirilmiştir.
 

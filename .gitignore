@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Data & Tensors (Do not push large datasets)
+*.dcm
+*.nii
+*.nii.gz
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.parquet
+*.h5
+*.hdf5
+*.zarr/
+*.npz
+*.npy
+*.db
+benchmark_results/
+
+# Logs & IDE
+*.log
+.idea/
+.vscode/
+.DS_Store

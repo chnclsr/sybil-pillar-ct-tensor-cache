@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Production Feature Extraction Pipeline for NLST CT Series
-=========================================================
-Extracts:
-  1. Sybil ResNet3D Spatial Tensors:  activ: [512, 25, 16, 16] (Saved as Safetensors FP16)
-  2. Pillar ATLAS Spatial Tensors:   activ: [1152, 32, 32, 64] (Saved as Safetensors FP16)
-  3. 1D Global Pooled Vectors:       Atlas (1152-d) + Sybil (512-d) (Saved as Parquet ZSTD FP16)
+Production Dense Spatial Tensor Extraction Pipeline for NLST CT Series
+======================================================================
+Extracts the highest-density spatial feature representations for training
+downstream attention and hazard heads with Feature Extraction backbones bypassed:
 
+  1. Sybil 3D Spatial Feature Tensor:  activ: [512, 25, 16, 16] (Saved as Safetensors FP16)
+  2. Pillar ATLAS Spatial Feature Tensor: activ: [1152, 32, 32, 64] (Saved as Safetensors FP16)
+
+Preserves full 3D spatial geometry (X, Y, Z / slices) for spatial attention modules.
 Uses: sybil.dicom_sorting.sort_dicom_paths_robust
 """
 
@@ -20,8 +22,6 @@ import pandas as pd
 import torch
 import torchvision.models.video as video_models
 import safetensors.torch as st_torch
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 # Add Sybil path
 sybil_root = "/home/bt/SYBIL/sybil_v0.1_baykar_sunucu"
@@ -32,11 +32,10 @@ from sybil.dicom_sorting import sort_dicom_paths_robust
 from sybil.serie import Serie
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="NLST Feature Extraction & Caching")
+    parser = argparse.ArgumentParser(description="Dense Spatial Tensor Extraction for Sybil & Pillar")
     parser.add_argument("--manifest", type=str,
                         default="/home/bt/SYBIL/sybil_v0.1_baykar_sunucu/examples/manifest_pillar_all.csv")
-    parser.add_argument("--output_dir", type=str, default="./cached_features")
-    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--output_dir", type=str, default="./cached_spatial_tensors")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--max_series", type=int, default=0, help="0 for all series")
     return parser.parse_args()
@@ -44,9 +43,8 @@ def parse_args():
 def main():
     args = parse_args()
     out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    spatial_dir = out_dir / "spatial_safetensors"
-    spatial_dir.mkdir(parents=True, exist_ok=True)
+    sybil_dir = out_dir / "sybil_spatial_safetensors"
+    sybil_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading manifest from {args.manifest}...")
     df = pd.read_csv(args.manifest)
@@ -54,8 +52,8 @@ def main():
         df = df.head(args.max_series)
     print(f"Total series to process: {len(df)}")
 
-    # Initialize Sybil ResNet3D encoder
-    print("Loading Sybil ResNet3D (r3d_18) encoder...")
+    # Initialize Sybil ResNet3D encoder (up to layer 4, spatial output)
+    print("Loading Sybil ResNet3D (r3d_18) spatial encoder...")
     encoder = video_models.r3d_18(weights=None)
     sybil_encoder = torch.nn.Sequential(*list(encoder.children())[:-2]).to(args.device).eval()
 
@@ -72,7 +70,7 @@ def main():
         if not dcm_files:
             continue
 
-        # Robust sorting
+        # Robust sorting using official Sybil dicom_sorting
         sorted_dcms, debug_sort = sort_dicom_paths_robust(dcm_files)
 
         # Load CT Volume
@@ -80,15 +78,14 @@ def main():
         vol = serie.get_volume().to(args.device) # [1, 3, 200, 256, 256]
 
         with torch.no_grad():
-            # Sybil 5D spatial feature map
+            # Sybil 3D/5D spatial feature map (unpooled)
             sybil_activ = sybil_encoder(vol) # [1, 512, 25, 16, 16]
-            sybil_gap = sybil_activ.mean(dim=[-3, -2, -1]).squeeze().cpu().numpy() # [512]
 
-        # Save individual Safetensors FP16
+        # Save individual Safetensors FP16 (Zero-copy, thread-safe for DataLoader)
         safe_key = f"{patient_id}_{idx}"
-        st_path = spatial_dir / f"{safe_key}.safetensors"
+        st_path = sybil_dir / f"{safe_key}.safetensors"
         st_torch.save_file({
-            "sybil_activ": sybil_activ.half().cpu(),
+            "sybil_activ": sybil_activ.squeeze(0).half().cpu(), # [512, 25, 16, 16]
         }, st_path)
 
         records.append({
@@ -96,27 +93,18 @@ def main():
             "series_path": p,
             "label": label,
             "safetensors_path": str(st_path),
-            "sybil_gap": sybil_gap,
+            "tensor_shape": list(sybil_activ.shape[1:]),
+            "dtype": "float16",
             "num_slices": len(dcm_files),
         })
 
         if (idx + 1) % 50 == 0 or (idx + 1) == len(df):
             print(f"[{idx+1}/{len(df)}] Processed in {time.time()-t0:.1f}s")
 
-    # Save 1D metadata & pooled embeddings as Parquet
-    print("Writing 1D pooled features to Parquet (ZSTD FP16)...")
-    pq_path = out_dir / "nlst_1d_pooled_features.parquet"
-    features_1d = np.array([r["sybil_gap"].astype(np.float16) for r in records])
-    pa_table = pa.Table.from_arrays([
-        pa.array([r["patient_id"] for r in records]),
-        pa.array([r["series_path"] for r in records]),
-        pa.array([r["label"] for r in records]),
-        pa.array([r["safetensors_path"] for r in records]),
-        pa.FixedSizeListArray.from_arrays(pa.array(features_1d.flatten()), features_1d.shape[1])
-    ], names=["patient_id", "series_path", "label", "safetensors_path", "sybil_gap"])
-    pq.write_table(pa_table, pq_path, compression="zstd")
-
-    print(f"Extraction complete! Parquet index at {pq_path}")
+    # Save manifest index CSV linking series metadata directly to cached tensor files
+    index_csv = out_dir / "spatial_tensors_manifest.csv"
+    pd.DataFrame(records).to_csv(index_csv, index=False)
+    print(f"\nExtraction complete! Spatial manifest index saved at: {index_csv}")
 
 if __name__ == "__main__":
     main()

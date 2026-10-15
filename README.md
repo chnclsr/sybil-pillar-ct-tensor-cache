@@ -4,7 +4,7 @@
 
 ---
 
-## 📌 Project Overview & Research Context
+## Project Overview and Research Context
 
 When conducting training experiments on deep lung cancer risk prediction architectures like **Sybil** (`torchvision.r3d_18`) and **Pillar** (`MultimodalAtlas` / ATLAS 3D ViT), training the full end-to-end network from raw DICOM is computationally prohibitive and storage-inefficient:
 - **2,965 curated NLST CT series** consume **267.81 GB** (546,046 `.dcm` slice files).
@@ -17,7 +17,7 @@ Downstream attention modules—specifically **Sybil's Spatial Attention** (`Sybi
 
 ---
 
-## 📊 Full Cohort (2,965 NLST Series) Dense Spatial Storage Benchmark
+## Full Cohort (2,965 NLST Series) Dense Spatial Storage Benchmark
 
 All numbers were measured on the complete cohort of **2,965 curated NLST LDCT series** (546,046 slices) sorted with `sybil.dicom_sorting.sort_dicom_paths_robust`:
 
@@ -35,7 +35,7 @@ All numbers were measured on the complete cohort of **2,965 curated NLST LDCT se
 
 ---
 
-## 🏗️ Architectural Pipeline: Downstream Training with Bypassed Feature Extraction
+## Architectural Pipeline: Downstream Training with Bypassed Feature Extraction
 
 Both models follow an identical paradigm when trained on pre-extracted intermediate dense features:
 
@@ -43,14 +43,14 @@ Both models follow an identical paradigm when trained on pre-extracted intermedi
 flowchart LR
     subgraph SYBIL_PIPELINE ["SYBIL (ResNet3D Backbone Bypassed)"]
         S1["CT Volume [B, 3, 200, 256, 256]"] -.->|Precomputed Once| S2["ResNet3D-18 Backbone"]
-        S2 ==>|Cache to Disk (18.1 GB)| S3["💾 Sybil activ: [B, 512, 25, 16, 16]<br>(Safetensors FP16 - 0.18 ms I/O)"]
-        S3 ==> S4["🔥 Trainable Downstream Head:<br>Sybil Spatial Attention<br>+ Multi-Year Hazard Head"]
+        S2 ==>|Cache to Disk (18.1 GB)| S3["Sybil activ: [B, 512, 25, 16, 16]<br>(Safetensors FP16 - 0.18 ms I/O)"]
+        S3 ==> S4["Trainable Downstream Head:<br>Sybil Spatial Attention<br>+ Multi-Year Hazard Head"]
     end
 
     subgraph PILLAR_PIPELINE ["PILLAR (ATLAS Backbone Bypassed)"]
         P1["11-Window CT [B, 11, 256, 256, 256]"] -.->|Precomputed Once| P2["ATLAS MultimodalAtlas 3D ViT"]
-        P2 ==>|Cache to Disk (134.4 GB)| P3["💾 ATLAS activ: [B, 1152, 32, 32, 64]<br>(HDF5 / Safetensors FP16)"]
-        P3 ==> P4["🔥 Trainable Downstream Head:<br>MultiAttentionPool (Cross-Attention)<br>+ CumulativeProbabilityLayer"]
+        P2 ==>|Cache to Disk (134.4 GB)| P3["ATLAS activ: [B, 1152, 32, 32, 64]<br>(HDF5 / Safetensors FP16)"]
+        P3 ==> P4["Trainable Downstream Head:<br>MultiAttentionPool (Cross-Attention)<br>+ CumulativeProbabilityLayer"]
     end
 
     style S3 fill:#d4edda,stroke:#28a745,stroke-width:2px
@@ -61,7 +61,7 @@ flowchart LR
 
 ---
 
-## 🎯 Format Decision & Engineering Rationale
+## Format Decision and Engineering Rationale
 
 ### Why Parquet and DuckDB Are Excluded
 * **Relational / Tabular Limits:** Tabular database engines cannot efficiently store multi-dimensional arrays with 3.28M to 75.5M floats per record. Storing these arrays as nested lists or binary BLOBs causes severe serialization overhead, Arrow buffer fragmentation, and out-of-memory (OOM) crashes during PyTorch DataLoader batch collation.
@@ -76,7 +76,7 @@ flowchart LR
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
 ### Installation
 ```bash
@@ -97,14 +97,19 @@ python scripts/extract_features.py \
 python scripts/benchmark_formats.py
 ```
 
-### 3. Train Downstream Attention Head Directly
+### 3. Run Pillar Compression Limits Benchmark
+```bash
+python scripts/test_pillar_compression_limits.py
+```
+
+### 4. Train Downstream Attention Head Directly
 ```bash
 python scripts/dataloader_example.py
 ```
 
 ---
 
-## 🔬 How Far Can Pillar's 49% Disk Savings Be Pushed?
+## How Far Can Pillar's 49% Disk Savings Be Pushed?
 
 While the initial baseline with HDF5 Gzip-1 yields **49.8% disk reduction** (134.4 GB for all 2,965 scans), we conducted empirical compression stress-tests (`scripts/test_pillar_compression_limits.py`) across 8 advanced configurations:
 
@@ -124,7 +129,7 @@ While the initial baseline with HDF5 Gzip-1 yields **49.8% disk reduction** (134
 
 ---
 
-## 📜 Repository Structure
+## Repository Structure
 ```
 ├── README.md                                  # Project overview and full cohort benchmarks
 ├── requirements.txt                           # Python dependencies
@@ -133,7 +138,7 @@ While the initial baseline with HDF5 Gzip-1 yields **49.8% disk reduction** (134
 │   ├── benchmark_formats.py                   # Storage format benchmark suite (Safetensors vs HDF5 vs .pt)
 │   ├── test_pillar_compression_limits.py      # Empirical compression limit tests on Pillar ATLAS
 │   └── dataloader_example.py                  # Downstream attention training loop template
-└── reports/
-    └── NLST_2965_STORAGE_BENCHMARK_REPORT.md  # Detailed 2,965-cohort benchmark report
+├── reports/
+│   └── NLST_2965_STORAGE_BENCHMARK_REPORT.md  # Detailed 2,965-cohort benchmark report
+└── pillar_compression_results.csv             # Empirical measurement logs from Pillar tests
 ```
-
